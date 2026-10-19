@@ -1,0 +1,421 @@
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Infrastructure Cutover Checklist</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  /* Layout: single column runbook — sticky progress bar up top, phases as sections,
+     each task a card of checkable sub-steps. Engineering/ops identity:
+     IBM Plex Sans + Plex Mono, cool slate neutrals, a teal infra accent, semantic risk chips. */
+  :root{
+    --bg:#f3f5f8; --surface:#ffffff; --surface-2:#eef1f5; --raise:#e6eaef;
+    --fg:#1a2430; --fg-muted:#5a6673; --fg-faint:#8a96a3;
+    --border:#d8dee5; --border-soft:#e4e9ef;
+    --accent:#0d9488; --accent-strong:#0f766e; --on-accent:#ffffff;
+    --ok:#15803d; --warn:#b45309; --crit:#b91c1c; --comp:#7c3aed;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --bg:#0f141a; --surface:#161d26; --surface-2:#1c2630; --raise:#222d38;
+      --fg:#e5eaf0; --fg-muted:#93a0af; --fg-faint:#6c7987;
+      --border:#2a343f; --border-soft:#232d37;
+      --accent:#2dd4bf; --accent-strong:#5eead4; --on-accent:#04231f;
+      --ok:#4ade80; --warn:#fbbf24; --crit:#f87171; --comp:#a78bfa;
+      color-scheme:dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0f141a; --surface:#161d26; --surface-2:#1c2630; --raise:#222d38;
+    --fg:#e5eaf0; --fg-muted:#93a0af; --fg-faint:#6c7987;
+    --border:#2a343f; --border-soft:#232d37;
+    --accent:#2dd4bf; --accent-strong:#5eead4; --on-accent:#04231f;
+    --ok:#4ade80; --warn:#fbbf24; --crit:#f87171; --comp:#a78bfa;
+    color-scheme:dark;
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.5;font-size:15px}
+  body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:var(--surface);z-index:30}
+  .wrap{width:100%;max-width:880px;margin-inline:auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+  h1,h2,h3{text-wrap:balance;margin:0}
+
+  /* ---- sticky top bar ---- */
+  .topbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--surface);border-bottom:1px solid var(--border)}
+  .topbar-inner{padding-block:.7rem .8rem;display:flex;flex-direction:column;gap:.6rem}
+  .tb-row{display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:.6rem;min-width:0}
+  .brand-text{display:flex;flex-direction:column;min-width:0}
+  .brand-title{font-weight:700;font-size:1.02rem;letter-spacing:-.01em;line-height:1.15}
+  .brand-sub{font-family:var(--mono);font-size:.64rem;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tb-actions{display:flex;gap:.4rem;flex:none}
+  .btn{font-family:var(--mono);font-size:.68rem;letter-spacing:.04em;text-transform:uppercase;color:var(--fg-muted);background:var(--surface-2);border:1px solid var(--border);border-radius:7px;padding:.42rem .6rem;cursor:pointer;transition:.15s;white-space:nowrap}
+  .btn:hover{color:var(--fg);border-color:var(--fg-faint)}
+  .btn.on{color:var(--on-accent);background:var(--accent);border-color:var(--accent)}
+  .btn.arm{color:var(--crit);border-color:var(--crit);background:color-mix(in srgb,var(--crit) 12%,transparent)}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  .overall{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
+  .track{flex:1;min-width:0;height:8px;background:var(--surface-2);border-radius:99px;overflow:hidden}
+  .track i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent-strong),var(--accent));border-radius:99px;transition:width .35s ease}
+  @media (prefers-reduced-motion:reduce){.track i,.box,.btn,.pill .dot{transition:none}}
+  .overall-meta{flex:none;font-family:var(--mono);font-size:.72rem;letter-spacing:.02em;color:var(--fg-muted)}
+  .overall-meta b{color:var(--fg);font-weight:600}
+
+  /* ---- sync status chip ---- */
+  .pill{flex:none;display:inline-flex;align-items:center;gap:.4rem;font-family:var(--mono);font-size:.6rem;letter-spacing:.06em;text-transform:uppercase;font-weight:600;padding:.26rem .5rem;border-radius:999px;border:1px solid var(--border);color:var(--fg-muted);background:var(--surface-2);white-space:nowrap}
+  .pill .dot{width:.46rem;height:.46rem;border-radius:50%;background:var(--fg-faint);flex:none}
+  .pill.live{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 38%,transparent);background:color-mix(in srgb,var(--ok) 12%,transparent)}
+  .pill.live .dot{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent);animation:pulse 2s ease-in-out infinite}
+  .pill.local{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 34%,transparent);background:color-mix(in srgb,var(--warn) 12%,transparent)}
+  .pill.local .dot{background:var(--warn)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  @media (prefers-reduced-motion:reduce){.pill.live .dot{animation:none}}
+
+  /* ---- body ---- */
+  main{padding-block:1.1rem 3rem}
+
+  section{margin-bottom:1.9rem}
+  .sec-head{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap;margin-bottom:.85rem}
+  .eyebrow{font-family:var(--mono);font-size:.66rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-strong);font-weight:600}
+  .sec-head h2{font-size:1.18rem;letter-spacing:-.015em;flex:1 1 auto;min-width:0}
+  .sec-prog{display:flex;align-items:center;gap:.5rem;flex:none;width:100%;max-width:230px}
+  .sec-prog .track{height:6px}
+  .sec-count{font-family:var(--mono);font-size:.7rem;color:var(--fg-faint)}
+
+  .card{background:var(--surface);border:1px solid var(--border-soft);border-radius:12px;padding:.5rem .35rem .3rem;margin-bottom:.8rem;overflow:hidden}
+  .card-head{display:flex;align-items:flex-start;gap:.6rem;padding:.45rem .7rem .3rem;flex-wrap:wrap}
+  .card-head h3{font-size:.98rem;font-weight:600;letter-spacing:-.01em;flex:1 1 auto;min-width:0}
+  .card-count{flex:none;font-family:var(--mono);font-size:.7rem;color:var(--fg-faint);background:var(--surface-2);border:1px solid var(--border-soft);border-radius:6px;padding:.1rem .4rem;margin-top:.05rem}
+  .card-done .card-count{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent);background:color-mix(in srgb,var(--ok) 12%,transparent)}
+  .card-flags{width:100%;display:flex;flex-wrap:wrap;gap:.35rem;padding:0 .7rem .2rem}
+
+  .flag{font-family:var(--mono);font-size:.6rem;letter-spacing:.06em;text-transform:uppercase;font-weight:600;padding:.14rem .42rem;border-radius:5px;border:1px solid}
+  .flag.crit{color:var(--crit);background:color-mix(in srgb,var(--crit) 12%,transparent);border-color:color-mix(in srgb,var(--crit) 32%,transparent)}
+  .flag.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent);border-color:color-mix(in srgb,var(--warn) 34%,transparent)}
+  .flag.comp{color:var(--comp);background:color-mix(in srgb,var(--comp) 13%,transparent);border-color:color-mix(in srgb,var(--comp) 32%,transparent)}
+  .flag.dep{color:var(--fg-muted);background:var(--surface-2);border-color:var(--border)}
+
+  ul.steps{list-style:none;margin:.15rem 0 .2rem;padding:0}
+  ul.steps li{border-top:1px solid var(--border-soft)}
+  ul.steps li:first-child{border-top:none}
+  .chk{display:flex;gap:.65rem;align-items:flex-start;cursor:pointer;padding:.5rem .7rem;transition:opacity .15s}
+  .chk input{position:absolute;opacity:0;width:0;height:0;margin:0}
+  .box{flex:none;width:1.12rem;height:1.12rem;margin-top:.1rem;border:1.5px solid var(--border);border-radius:5px;background:var(--bg);display:grid;place-items:center;transition:.15s}
+  .chk input:checked + .box{background:var(--accent);border-color:var(--accent)}
+  .chk input:checked + .box::after{content:"";width:.28rem;height:.56rem;border:solid var(--on-accent);border-width:0 2px 2px 0;transform:rotate(43deg) translate(-.5px,-1.5px)}
+  .chk input:focus-visible + .box{outline:2px solid var(--accent);outline-offset:2px}
+  .step-txt{min-width:0;font-size:.875rem}
+  .step-txt .lead{color:var(--fg)}
+  .inline-flag{font-family:var(--mono);font-size:.58rem;letter-spacing:.05em;text-transform:uppercase;font-weight:600;padding:.05rem .32rem;border-radius:4px;margin-left:.35rem;white-space:nowrap;vertical-align:1.5px}
+  .inline-flag.crit{color:var(--crit);background:color-mix(in srgb,var(--crit) 13%,transparent)}
+  .inline-flag.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 15%,transparent)}
+  .chk:has(input:checked){opacity:.52}
+  .chk:has(input:checked) .step-txt .lead{text-decoration:line-through;text-decoration-color:var(--fg-faint)}
+  body.hide-done ul.steps li:has(input:checked){display:none}
+
+  footer{color:var(--fg-faint);font-size:.75rem;font-family:var(--mono);letter-spacing:.02em;text-align:center;padding-top:.5rem}
+</style>
+
+<header class="topbar">
+  <div class="topbar-inner wrap">
+    <div class="tb-row">
+      <div class="brand">
+        <span class="brand-text">
+          <span class="brand-title">Africa Telerad Kenya Limited</span>
+          <span class="brand-sub">Infrastructure Cutover Checklist</span>
+        </span>
+      </div>
+      <div class="tb-actions">
+        <button id="hideBtn" class="btn" type="button">Hide done</button>
+        <button id="resetBtn" class="btn" type="button">Reset</button>
+      </div>
+    </div>
+    <div class="overall">
+      <div class="track"><i id="overallFill"></i></div>
+      <div class="overall-meta"><b id="overallCount">0 of 0</b> done</div>
+      <span id="syncPill" class="pill local"><span class="dot"></span><span id="syncText">This device only</span></span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- PHASE 01 -->
+  <section data-section>
+    <div class="sec-head">
+      <span class="eyebrow">Phase 01</span>
+      <h2>Servers &amp; PACS</h2>
+      <div class="sec-prog"><div class="track"><i data-sec-fill></i></div><span class="sec-count" data-sec-count>0/0</span></div>
+    </div>
+
+    <div class="card" data-card>
+      <div class="card-head"><h3>Buy another HP server</h3><span class="card-count" data-card-count></span></div>
+      <div class="card-flags"><span class="flag dep">Blocks: PACS move</span></div>
+      <ul class="steps">
+        <li><label class="chk"><input type="checkbox" data-id="hp1"><span class="box"></span><span class="step-txt"><span class="lead">Buying: <b>HP ProLiant DL360 Gen10</b> — 2× Intel Xeon Silver 4210 (10-core / 20-thread each, 20C/40T total), 256&nbsp;GB RAM, 7.68&nbsp;TB SSD, hardware RAID</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="hp2"><span class="box"></span><span class="step-txt"><span class="lead">Buy <b>Windows Server</b>  server 1</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="hp3"><span class="box"></span><span class="step-txt"><span class="lead">Buy <b>Windows Server</b>  server 2</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="hp4"><span class="box"></span><span class="step-txt"><span class="lead">Buy <b>Windows Server</b>  server 3</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="hp5"><span class="box"></span><span class="step-txt"><span class="lead">Install <b>VMware ESXi</b> (vSphere Hypervisor) as the base, then run PACS and the other workloads as VMs on top</span></span></label></li>
+      </ul>
+    </div>
+
+    <div class="card" data-card>
+      <div class="card-head"><h3>Move PACS to the new HP server</h3><span class="card-count" data-card-count></span></div>
+      <ul class="steps">
+        <li><label class="chk"><input type="checkbox" data-id="pm1"><span class="box"></span><span class="step-txt"><span class="lead">Build the host: OS, latest updates</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="pm2"><span class="box"></span><span class="step-txt"><span class="lead">Install the PACS application and database on the new server, running on separate VM</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="pm3"><span class="box"></span><span class="step-txt"><span class="lead">Reconfigure AE titles, ports and DICOM nodes on every modality, worklist, router and workstation</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="pm4"><span class="box"></span><span class="step-txt"><span class="lead">Repoint the RIS / worklist and radiologist viewers to the new host</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="pm5"><span class="box"></span><span class="step-txt"><span class="lead">Test C-ECHO, C-STORE and C-FIND/C-MOVE (query &amp; retrieve) from each modality and workstation</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="pm6"><span class="box"></span><span class="step-txt"><span class="lead">Cut over in the window; keep the old server read-only as a fallback until the new one is proven</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="pm7"><span class="box"></span><span class="step-txt"><span class="lead">Migration</span></span></label></li>
+      </ul>
+    </div>
+
+    <div class="card" data-card>
+      <div class="card-head"><h3>Separate file server for AfyaRad</h3><span class="card-count" data-card-count></span></div>
+      <ul class="steps">
+        <li><label class="chk"><input type="checkbox" data-id="fs1"><span class="box"></span><span class="step-txt"><span class="lead">Provision the file server and storage</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="fs2"><span class="box"></span><span class="step-txt"><span class="lead">Set up shares and permissions</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="fs3"><span class="box"></span><span class="step-txt"><span class="lead">Migrate data</span></span></label></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- PHASE 02 -->
+  <section data-section>
+    <div class="sec-head">
+      <span class="eyebrow">Phase 02</span>
+      <h2>Network &amp; connectivity</h2>
+      <div class="sec-prog"><div class="track"><i data-sec-fill></i></div><span class="sec-count" data-sec-count>0/0</span></div>
+    </div>
+
+    <div class="card" data-card>
+      <div class="card-head"><h3>Get a backup ISP</h3><span class="card-count" data-card-count></span></div>
+      <ul class="steps">
+        <li><label class="chk"><input type="checkbox" data-id="isp1"><span class="box"></span><span class="step-txt"><span class="lead">Choose a backup ISP provider for redundancy</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="isp2"><span class="box"></span><span class="step-txt"><span class="lead">Schedule the install</span></span></label></li>
+      </ul>
+    </div>
+
+    <div class="card" data-card>
+      <div class="card-head"><h3>Set up the new fiber firewall</h3><span class="card-count" data-card-count></span></div>
+      <div class="card-flags"><span class="flag warn">Downtime</span></div>
+      <ul class="steps">
+        <li><label class="chk"><input type="checkbox" data-id="fw1"><span class="box"></span><span class="step-txt"><span class="lead">Update firmware to a stable release</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="fw2"><span class="box"></span><span class="step-txt"><span class="lead">Configure interfaces: WAN1 (primary ISP), LAN / DMZ </span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="fw3"><span class="box"></span><span class="step-txt"><span class="lead">Rebuild security policies and NAT; restrict PACS/DICOM ports to known peers only</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="fw4"><span class="box"></span><span class="step-txt"><span class="lead">Set up VPN for remote radiologists and a site-to-site tunnel to the DR site</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="fw5"><span class="box"></span><span class="step-txt"><span class="lead">Configure WAN failover / SD-WAN between the two ISPs, then <b>test it by pulling the primary</b></span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="fw7"><span class="box"></span><span class="step-txt"><span class="lead">Cut over from the old firewall in a window; keep it on hand for rollback</span></span></label></li>
+      </ul>
+    </div>
+
+    <div class="card" data-card>
+      <div class="card-head"><h3>Buy a backup SonicWall</h3><span class="card-count" data-card-count></span></div>
+      <ul class="steps">
+        <li><label class="chk"><input type="checkbox" data-id="sw1"><span class="box"></span><span class="step-txt"><span class="lead">Match the model and firmware to the primary</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="sw2"><span class="box"></span><span class="step-txt"><span class="lead">Activate licensing and security subscriptions</span></span></label></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- PHASE 03 -->
+  <section data-section>
+    <div class="sec-head">
+      <span class="eyebrow">Phase 03</span>
+      <h2>Cloudflare &amp; DNS</h2>
+      <div class="sec-prog"><div class="track"><i data-sec-fill></i></div><span class="sec-count" data-sec-count>0/0</span></div>
+    </div>
+
+    <div class="card" data-card>
+      <div class="card-head"><h3>Move all domains to Cloudflare</h3><span class="card-count" data-card-count></span></div>
+      <div class="card-flags"><span class="flag crit">Email risk</span></div>
+      <ul class="steps">
+        <li><label class="chk"><input type="checkbox" data-id="cf1"><span class="box"></span><span class="step-txt"><span class="lead">Inventory every domain and all records: A / AAAA / CNAME / MX / TXT / SRV</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="cf3"><span class="box"></span><span class="step-txt"><span class="lead">Set proxy mode per record</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="cf4"><span class="box"></span><span class="step-txt"><span class="lead">Update nameservers at each registrar; confirm activation and propagation</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="cf5"><span class="box"></span><span class="step-txt"><span class="lead">Set SSL/TLS and enable HTTPS</span></span></label></li>
+      </ul>
+    </div>
+
+    <div class="card" data-card>
+      <div class="card-head"><h3>Set up load balancing in Cloudflare</h3><span class="card-count" data-card-count></span></div>
+      <div class="card-flags"><span class="flag dep">Needs: domains on Cloudflare</span></div>
+      <ul class="steps">
+        <li><label class="chk"><input type="checkbox" data-id="lb1"><span class="box"></span><span class="step-txt"><span class="lead">Define origin pools</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="lb2"><span class="box"></span><span class="step-txt"><span class="lead">Add a health check / monitor per origin</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="lb3"><span class="box"></span><span class="step-txt"><span class="lead">Choose steering (failover / dynamic) and session affinity if the app needs it</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="lb4"><span class="box"></span><span class="step-txt"><span class="lead"><b>Note:</b> Cloudflare LB covers HTTP(S) apps only DICOM / non-HTTP image traffic needs Spectrum or firewall-level failover, not this</span><span class="inline-flag warn">Scope</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="lb5"><span class="box"></span><span class="step-txt"><span class="lead">Test failover by disabling an origin</span></span></label></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- PHASE 04 -->
+  <section data-section>
+    <div class="sec-head">
+      <span class="eyebrow">Phase 04</span>
+      <h2>Disaster recovery — Coast</h2>
+      <div class="sec-prog"><div class="track"><i data-sec-fill></i></div><span class="sec-count" data-sec-count>0/0</span></div>
+    </div>
+    <div class="card" data-card>
+      <div class="card-head"><h3>Take the Lenovo server to the Coast DR site MOB2</h3><span class="card-count" data-card-count></span></div>
+      <div class="card-flags"><span class="flag crit">Data risk</span></div>
+      <ul class="steps">
+        <li><label class="chk"><input type="checkbox" data-id="dr2"><span class="box"></span><span class="step-txt"><span class="lead">Reinstall the OS</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="dr3"><span class="box"></span><span class="step-txt"><span class="lead">Arrange insured transport and handle the hardware carefully in transit</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="dr4"><span class="box"></span><span class="step-txt"><span class="lead">Rack, power, network and cool it at the DR facility</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="dr5"><span class="box"></span><span class="step-txt"><span class="lead">Bring up the site-to-site VPN back to iColo</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="dr6"><span class="box"></span><span class="step-txt"><span class="lead">Configure as a DR</span></span></label></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- PHASE 05 -->
+  <section data-section>
+    <div class="sec-head">
+      <span class="eyebrow">Phase 05</span>
+      <h2>Validation &amp; sign-off</h2>
+      <div class="sec-prog"><div class="track"><i data-sec-fill></i></div><span class="sec-count" data-sec-count>0/0</span></div>
+    </div>
+    <div class="card" data-card>
+      <div class="card-head"><h3>Prove the whole chain before you close out</h3><span class="card-count" data-card-count></span></div>
+      <ul class="steps">
+        <li><label class="chk"><input type="checkbox" data-id="v1"><span class="box"></span><span class="step-txt"><span class="lead">Confirm remote radiologists connect over VPN across both ISPs</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="v2"><span class="box"></span><span class="step-txt"><span class="lead">Verify automatic ISP and firewall failover end to end</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="v3"><span class="box"></span><span class="step-txt"><span class="lead">Confirm backups and DR replication are running and monitored/alerting</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="v4"><span class="box"></span><span class="step-txt"><span class="lead">Update network and asset documentation; archive the old configs</span></span></label></li>
+        <li><label class="chk"><input type="checkbox" data-id="v5"><span class="box"></span><span class="step-txt"><span class="lead">Decommission retired hardware and services only after a clean verification window</span></span></label></li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>Tap an item to mark it done · the chip up top shows whether you're synced with the team</footer>
+</main>
+
+<!-- ============================================================= -->
+<!-- Firebase SDK (loads from Google; works on GitHub Pages)        -->
+<!-- ============================================================= -->
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
+
+<!-- ============================================================= -->
+<!-- STEP: paste your Firebase config between the braces below.     -->
+<!-- Firebase console → Project settings (gear) → "Your apps" →     -->
+<!-- Web app → "SDK setup and configuration" → Config.             -->
+<!-- Leave it blank and the checklist still works, but saves only   -->
+<!-- on each person's own device (no team sync).                    -->
+<!-- ============================================================= -->
+<script>
+  var FIREBASE_CONFIG = {
+    apiKey: "AIzaSyCXwTG0UMnE8DQiQOxk8YXBWux470yOYV0",
+    authDomain: "africatelerad-checklist.firebaseapp.com",
+    databaseURL: "https://africatelerad-checklist-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "africatelerad-checklist",
+    storageBucket: "africatelerad-checklist.firebasestorage.app",
+    messagingSenderId: "1052740861893",
+    appId: "1:1052740861893:web:119f645e8f201aba2715ac"
+  };
+</script>
+
+<script>
+(function(){
+  var KEY='infra-cutover-v2';
+  var PATH='checklist/infra-cutover-v2';
+  var boxes=Array.prototype.slice.call(document.querySelectorAll('input[type=checkbox][data-id]'));
+  var state={};
+  try{ state=JSON.parse(localStorage.getItem(KEY))||{}; }catch(e){ state={}; }
+
+  var fill=document.getElementById('overallFill');
+  var ocount=document.getElementById('overallCount');
+  var syncPill=document.getElementById('syncPill');
+  var syncText=document.getElementById('syncText');
+  var stateRef=null, remoteMode=false;
+
+  function applyState(){ boxes.forEach(function(b){ b.checked=!!state[b.getAttribute('data-id')]; }); }
+  function save(){ try{ localStorage.setItem(KEY,JSON.stringify(state)); }catch(e){} }
+  function pct(a,b){ return b? Math.round(a/b*100):0; }
+  function countIn(el){ var ins=el.querySelectorAll('input[type=checkbox]'); var d=0;
+    for(var i=0;i<ins.length;i++){ if(ins[i].checked) d++; } return {done:d,total:ins.length}; }
+
+  function update(){
+    document.querySelectorAll('[data-card]').forEach(function(card){
+      var c=countIn(card);
+      var el=card.querySelector('[data-card-count]'); if(el) el.textContent=c.done+'/'+c.total;
+      card.classList.toggle('card-done', c.total>0 && c.done===c.total);
+    });
+    document.querySelectorAll('[data-section]').forEach(function(sec){
+      var c=countIn(sec);
+      var f=sec.querySelector('[data-sec-fill]'); if(f) f.style.width=pct(c.done,c.total)+'%';
+      var n=sec.querySelector('[data-sec-count]'); if(n) n.textContent=c.done+'/'+c.total;
+    });
+    var d=0; boxes.forEach(function(b){ if(b.checked) d++; });
+    if(fill) fill.style.width=pct(d,boxes.length)+'%';
+    if(ocount) ocount.textContent=d+' of '+boxes.length;
+  }
+
+  function setSync(mode){ // 'live' | 'connecting' | 'local'
+    if(!syncPill||!syncText) return;
+    syncPill.classList.remove('live','local');
+    if(mode==='live'){ syncPill.classList.add('live'); syncText.textContent='Live · shared'; }
+    else if(mode==='connecting'){ syncText.textContent='Connecting…'; }
+    else { syncPill.classList.add('local'); syncText.textContent='This device only'; }
+  }
+
+  // paint from local cache immediately
+  applyState(); update();
+
+  // toggles
+  boxes.forEach(function(b){
+    b.addEventListener('change',function(){
+      var id=b.getAttribute('data-id');
+      if(b.checked) state[id]=true; else delete state[id];
+      save(); update();
+      if(remoteMode && stateRef){ try{ stateRef.child(id).set(b.checked?true:null); }catch(e){} }
+    });
+  });
+
+  // hide done
+  var hideBtn=document.getElementById('hideBtn');
+  hideBtn.addEventListener('click',function(){
+    var on=document.body.classList.toggle('hide-done');
+    hideBtn.classList.toggle('on', on);
+    hideBtn.textContent=on?'Show all':'Hide done';
+  });
+
+  // reset (double-tap to confirm) — clears for everyone when synced
+  var resetBtn=document.getElementById('resetBtn'), armed=false, timer=null;
+  resetBtn.addEventListener('click',function(){
+    if(!armed){
+      armed=true; resetBtn.classList.add('arm'); resetBtn.textContent='Tap again to clear';
+      timer=setTimeout(function(){ armed=false; resetBtn.classList.remove('arm'); resetBtn.textContent='Reset'; },3000);
+      return;
+    }
+    clearTimeout(timer); armed=false; resetBtn.classList.remove('arm'); resetBtn.textContent='Reset';
+    state={}; boxes.forEach(function(b){ b.checked=false; }); save(); update();
+    if(remoteMode && stateRef){ try{ stateRef.set(null); }catch(e){} }
+  });
+
+  // ---- shared state via Firebase (optional) ----
+  function initFirebase(){
+    try{
+      if(!window.firebase || typeof FIREBASE_CONFIG==='undefined' || !FIREBASE_CONFIG.databaseURL){ setSync('local'); return; }
+      firebase.initializeApp(FIREBASE_CONFIG);
+      stateRef=firebase.database().ref(PATH);
+      remoteMode=true;
+      setSync('connecting');
+      firebase.database().ref('.info/connected').on('value',function(s){
+        setSync(s.val()===true ? 'live' : 'connecting');
+      });
+      stateRef.on('value',function(snap){
+        var remote=snap.val()||{};
+        state={};
+        for(var k in remote){ if(remote[k]) state[k]=true; }
+        save(); applyState(); update();   // setting .checked in code does not fire 'change', so no write loop
+      });
+    }catch(e){ remoteMode=false; setSync('local'); }
+  }
+  initFirebase();
+})();
+</script>

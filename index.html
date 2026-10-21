@@ -384,19 +384,6 @@
     hideBtn.textContent=on?'Show all':'Hide done';
   });
 
-  // reset (double-tap to confirm) — clears for everyone when synced
-  var resetBtn=document.getElementById('resetBtn'), armed=false, timer=null;
-  resetBtn.addEventListener('click',function(){
-    if(!armed){
-      armed=true; resetBtn.classList.add('arm'); resetBtn.textContent='Tap again to clear';
-      timer=setTimeout(function(){ armed=false; resetBtn.classList.remove('arm'); resetBtn.textContent='Reset'; },3000);
-      return;
-    }
-    clearTimeout(timer); armed=false; resetBtn.classList.remove('arm'); resetBtn.textContent='Reset';
-    state={}; boxes.forEach(function(b){ b.checked=false; }); save(); update();
-    if(remoteMode && stateRef){ try{ stateRef.set(null); }catch(e){} }
-  });
-
   // ---- shared state via Firebase (optional) ----
   function initFirebase(){
     try{
